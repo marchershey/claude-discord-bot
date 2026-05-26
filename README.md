@@ -182,8 +182,12 @@ Attach an image to any message and the bot will read it using Claude's vision. W
 |---------|-------------|
 | `/help` | Show all available commands |
 | `/clear` or `/new` | Archive the current conversation and start fresh |
-| `/sessions` | List this channel's past conversations |
-| `/resume <number>` | Jump back into a previous conversation |
+| `/sessions` | List this channel's past conversations (local numbers, use with `/resume`) |
+| `/sessions all:True` | List every session across all channels with global numbers (use with `/delete`) |
+| `/resume <number>` | Jump back into a previous conversation in this channel |
+| `/delete <number>` | Delete a specific session by its global number from `/sessions all:True` |
+| `/delete all` | Delete all sessions in the current channel |
+| `/purge confirm:True` | Delete every session across every channel (cannot be undone) |
 | `/status` | Check the status of configured services (requires `statusServices` in config) |
 | `/wiki <page>` | Read a page from your connected notes directory |
 | `/remind <time> <message>` | Set a reminder (e.g. `/remind 2h call the shop`) |
@@ -201,10 +205,20 @@ Reminders fire as a DM regardless of which channel you set them from:
 
 ### Session Management
 
-The bot never deletes conversation history. `/clear` just archives it so you can always come back:
+The bot never deletes conversation history by default. `/clear` just archives it so you can always come back. Sessions are numbered two ways depending on the command:
+
+**Local numbers** (from `/sessions`) are used with `/resume`. They only refer to sessions in the current channel.
+
+**Global numbers** (from `/sessions all:True`) are used with `/delete`. They are unique across every channel, so you can delete any session from anywhere without switching channels.
+
 ```
-/sessions       (lists all past conversations with timestamps)
-/resume 3       (picks up conversation #3 exactly where it left off)
+/sessions                 (lists this channel's sessions, numbered locally)
+/resume 3                 (resumes local session #3 in this channel)
+
+/sessions all:True        (lists all sessions everywhere, numbered globally)
+/delete 7                 (deletes global session #7, no matter which channel it's in)
+/delete all               (deletes all sessions in the current channel)
+/purge confirm:True       (wipes everything across all channels)
 ```
 
 ---
