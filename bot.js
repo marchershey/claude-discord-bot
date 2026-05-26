@@ -359,10 +359,10 @@ const BASE_SYSTEM = [
   `CROSS-TURN MEMORY: this Discord channel is wrapped around a persistent claude session (\`claude -p --resume\`). Your past tool_use/tool_result blocks from earlier turns in THIS channel ARE in your context — you can rely on them the same way you would in a Claude Code CLI session. But: across-channel state is NOT shared, and process restarts can rotate the session (you'll see a "[prior session context lost, starting fresh]" preamble if so). If a tool result is missing from your visible context and you need it, re-run the tool — don't fabricate.`,
 ].join('\n');
 
-// One-line hint appended to every turn so Claude knows memory files exist.
-// Claude reads them on demand — they are never bulk-injected.
+// One-line hint appended to every turn so Claude knows the memory index exists.
+// Claude reads MEMORY.md first for a summary, then individual files on demand.
 const MEMORY_HINT = MEMORY_PATH
-  ? `\nPersistent memory (notes about this user) is at ${MEMORY_PATH}/ — read any .md file there on demand if you need personal context.`
+  ? `\nPersistent memory index: ${MEMORY_PATH}/MEMORY.md — read it for a summary of what's remembered, then read individual files on demand.`
   : '';
 
 // ── Discord client ────────────────────────────────────────────────────────────
