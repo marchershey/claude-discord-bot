@@ -223,6 +223,54 @@ Auto-generated registry of Claude CLI sessions per Discord channel. Updated on e
   catch (e) { console.error('regenerateWikiPage failed:', e.message); }
 }
 
+// Delete a specific session by UUID. Removes the registry entry and the
+// underlying JSONL file if it exists. Returns true if deleted, false if not found.
+function deleteSession(channelId, uuid) {
+  const state = load();
+  const ch = state[channelId];
+  if (!ch || !ch.sessions[uuid]) return false;
+  const jsonlPath = path.join(CLAUDE_PROJECT_DIR, `${uuid}.jsonl`);
+  try { if (fs.existsSync(jsonlPath)) fs.unlinkSync(jsonlPath); } catch {}
+  delete ch.sessions[uuid];
+  if (ch.active === uuid) ch.active = null;
+  save(state);
+  regenerateWikiPage(state);
+  return true;
+}
+
+// Delete all sessions for a single channel. Returns the number deleted.
+function deleteAllInChannel(channelId) {
+  const state = load();
+  const ch = state[channelId];
+  if (!ch) return 0;
+  let count = 0;
+  for (const uuid of Object.keys(ch.sessions)) {
+    const jsonlPath = path.join(CLAUDE_PROJECT_DIR, `${uuid}.jsonl`);
+    try { if (fs.existsSync(jsonlPath)) fs.unlinkSync(jsonlPath); } catch {}
+    count++;
+  }
+  state[channelId] = { active: null, sessions: {} };
+  save(state);
+  regenerateWikiPage(state);
+  return count;
+}
+
+// Wipe every session across every channel. Returns the total number deleted.
+function purgeAll() {
+  const state = load();
+  let count = 0;
+  for (const ch of Object.values(state)) {
+    for (const uuid of Object.keys(ch.sessions || {})) {
+      const jsonlPath = path.join(CLAUDE_PROJECT_DIR, `${uuid}.jsonl`);
+      try { if (fs.existsSync(jsonlPath)) fs.unlinkSync(jsonlPath); } catch {}
+      count++;
+    }
+  }
+  fs.writeFileSync(FILE, JSON.stringify({}, null, 2));
+  regenerateWikiPage({});
+  return count;
+}
+
 module.exports = {
   getActive,
   registerNew,
@@ -232,4 +280,7 @@ module.exports = {
   listForChannel,
   resumeByIndex,
   sessionFileExists,
+  deleteSession,
+  deleteAllInChannel,
+  purgeAll,
 };

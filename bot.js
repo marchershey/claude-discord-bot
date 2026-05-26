@@ -112,6 +112,14 @@ const COMMANDS = [
   new SlashCommandBuilder()
     .setName('reminders').setDescription('List your active reminders'),
   new SlashCommandBuilder()
+    .setName('delete')
+    .setDescription('Delete a session from this channel')
+    .addStringOption(o => o.setName('target').setDescription('Session number from /sessions, or "all" to delete every session in this channel').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('purge')
+    .setDescription('Delete ALL sessions across every channel. Cannot be undone.')
+    .addBooleanOption(o => o.setName('confirm').setDescription('Set to True to confirm').setRequired(true)),
+  new SlashCommandBuilder()
     .setName('simulate-alert').setDescription('Post a fake alert to the alert channel to test enrichment')
     .addStringOption(o => o.setName('service').setDescription('Service name (default: TestService)'))
     .addStringOption(o => o.setName('kind').setDescription('down | resolved | action')
@@ -460,6 +468,51 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
       await interaction.editReply(`🔄 Resumed session #${n} (\`${resumedUuid.slice(0, 8)}…\`). Next message continues that conversation with its full tool-call history intact.`);
+      return;
+    }
+
+    if (commandName === 'delete') {
+      const target = interaction.options.getString('target').trim().toLowerCase();
+
+      if (target === 'all') {
+        const count = sessionReg.deleteAllInChannel(interaction.channelId);
+        await interaction.editReply(count > 0
+          ? `🗑️ Deleted ${count} session${count === 1 ? '' : 's'} from this channel.`
+          : 'No sessions to delete in this channel.');
+        return;
+      }
+
+      const n = parseInt(target, 10);
+      if (isNaN(n) || n < 1) {
+        await interaction.editReply('Invalid target. Use a session number from `/sessions`, or `all` to delete everything in this channel.');
+        return;
+      }
+
+      const list = sessionReg.listForChannel(interaction.channelId);
+      const target_session = list.find(s => s.index === n);
+      if (!target_session) {
+        await interaction.editReply(`No session #${n} found. Run \`/sessions\` to see what's available.`);
+        return;
+      }
+
+      const deleted = sessionReg.deleteSession(interaction.channelId, target_session.uuid);
+      if (deleted) {
+        const title = target_session.title || '(no title)';
+        await interaction.editReply(`🗑️ Deleted session #${n}: "${title}"`);
+      } else {
+        await interaction.editReply(`Could not delete session #${n}. It may have already been removed.`);
+      }
+      return;
+    }
+
+    if (commandName === 'purge') {
+      const confirmed = interaction.options.getBoolean('confirm');
+      if (!confirmed) {
+        await interaction.editReply('Set `confirm` to `True` to actually run the purge. This will wipe every session across every channel and cannot be undone.');
+        return;
+      }
+      const count = sessionReg.purgeAll();
+      await interaction.editReply(`🗑️ Purged ${count} session${count === 1 ? '' : 's'} across all channels. Starting fresh.`);
       return;
     }
 
