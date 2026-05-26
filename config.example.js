@@ -21,6 +21,13 @@ module.exports = {
   // so it always knows who it's talking to.
   userMdPath: null,  // e.g. '/home/you/vault/wiki/people/you.md'
 
+  // Path to a directory of persistent memory files (optional).
+  // Claude Code writes small .md files here to remember facts about you across
+  // sessions (preferences, project context, ongoing work, etc.). Pointing the
+  // bot at the same directory means the Discord bot shares that memory.
+  // If you use Claude Code, check: ~/.claude/projects/<encoded-homedir>/memory/
+  memoryPath: null,  // e.g. '/home/you/.claude/projects/-home-you/memory'
+
   // ── Identity ───────────────────────────────────────────────────────────────
 
   // Your name — used in Claude's system prompt so it addresses you naturally.

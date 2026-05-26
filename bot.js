@@ -17,6 +17,7 @@ const VAULT             = config.vaultPath || null;
 const GLOBAL_CLAUDE_MD  = path.join(os.homedir(), '.claude', 'CLAUDE.md');
 const PROJECT_CLAUDE_MD = VAULT ? path.join(VAULT, 'CLAUDE.md') : null;
 const HOT_MD            = WIKI ? path.join(WIKI, 'hot.md') : null;
+const MEMORY_PATH       = config.memoryPath || null;
 const CLAUDE            = config.claudePath || 'claude';
 const DISCORD_TOKEN     = process.env.DISCORD_TOKEN;
 const REMINDERS_FILE    = path.join(__dirname, 'reminders.json');
@@ -164,6 +165,24 @@ function readCoreContext() {
       catch { return ''; }
     })
     .filter(Boolean).join('\n\n');
+}
+
+// Read all .md files from config.memoryPath (Claude's persistent notes about the user).
+// Returns a formatted block ready to inject into the system prompt, or '' if none.
+function readMemoryFiles() {
+  if (!MEMORY_PATH) return '';
+  let files;
+  try { files = fs.readdirSync(MEMORY_PATH).filter(f => f.endsWith('.md')); }
+  catch { return ''; }
+  if (!files.length) return '';
+  const contents = files
+    .map(f => {
+      try { return fs.readFileSync(path.join(MEMORY_PATH, f), 'utf8').trim(); }
+      catch { return ''; }
+    })
+    .filter(Boolean);
+  if (!contents.length) return '';
+  return `=== PERSISTENT MEMORY ===\n${contents.join('\n\n---\n\n')}`;
 }
 
 // Returns wiki files relevant to the message content based on config.topicMappings.
@@ -782,7 +801,11 @@ async function handleInboundAlert(message) {
 
       const topicFiles = getWikiFiles(alertText);
       const topicContext = topicFiles.length ? readWiki(...topicFiles) : '';
+      const coreContext = readCoreContext();
+      const memoryContext = readMemoryFiles();
       let appendSystem = BASE_SYSTEM;
+      if (coreContext) appendSystem += `\n\n${coreContext}`;
+      if (memoryContext) appendSystem += `\n\n${memoryContext}`;
       if (topicContext) appendSystem += `\n\n=== TOPIC CONTEXT ===\n${topicContext}`;
 
       appendLog(channelId, 'user', `[INBOUND ALERT]\n${alertText}`);
@@ -878,11 +901,13 @@ client.on(Events.MessageCreate, async (message) => {
       // every turn via --append-system-prompt. Topic context is also small and
       // turn-specific, so it also goes in --append-system-prompt.
       //
-      // Core context (CLAUDE.md, hot.md, user profile) is loaded by the SessionStart
-      // hook on every spawn (fires on both `claude -p` and `claude -p --resume <uuid>`).
       const topicFiles = getWikiFiles(content);
       const topicContext = topicFiles.length ? readWiki(...topicFiles) : '';
+      const coreContext = readCoreContext();
+      const memoryContext = readMemoryFiles();
       let appendSystem = BASE_SYSTEM;
+      if (coreContext) appendSystem += `\n\n${coreContext}`;
+      if (memoryContext) appendSystem += `\n\n${memoryContext}`;
       if (topicContext) appendSystem += `\n\n=== TOPIC CONTEXT ===\n${topicContext}`;
 
       const userText = `${content}${attachmentNote}`;
