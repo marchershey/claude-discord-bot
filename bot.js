@@ -14,9 +14,6 @@ const config = require('./config');
 
 const WIKI              = config.wikiPath || null;
 const VAULT             = config.vaultPath || null;
-const GLOBAL_CLAUDE_MD  = path.join(os.homedir(), '.claude', 'CLAUDE.md');
-const PROJECT_CLAUDE_MD = VAULT ? path.join(VAULT, 'CLAUDE.md') : null;
-const HOT_MD            = WIKI ? path.join(WIKI, 'hot.md') : null;
 const MEMORY_PATH       = config.memoryPath || null;
 const CLAUDE            = config.claudePath || 'claude';
 const DISCORD_TOKEN     = process.env.DISCORD_TOKEN;
@@ -144,65 +141,10 @@ function readWiki(...files) {
     .filter(Boolean).join('\n\n');
 }
 
-// Read core operating files from absolute paths, UNSLICED.
-// Always injected so Claude has CLAUDE.md guidance + full hot.md every turn.
-function readCoreContext() {
-  const files = [
-    { label: '~/.claude/CLAUDE.md (global user instructions)', path: GLOBAL_CLAUDE_MD },
-  ];
-  if (PROJECT_CLAUDE_MD) {
-    files.push({ label: 'CLAUDE.md (vault project instructions)', path: PROJECT_CLAUDE_MD });
-  }
-  if (HOT_MD) {
-    files.push({ label: 'wiki/hot.md (recent context — full)', path: HOT_MD });
-  }
-  if (config.userMdPath) {
-    files.push({ label: 'User profile', path: config.userMdPath });
-  }
-  return files
-    .map(({ label, path: p }) => {
-      try { return `--- ${label} ---\n${fs.readFileSync(p, 'utf8')}`; }
-      catch { return ''; }
-    })
-    .filter(Boolean).join('\n\n');
-}
-
-// Read all .md files from config.memoryPath (Claude's persistent notes about the user).
-// Returns a formatted block ready to inject into the system prompt, or '' if none.
-function readMemoryFiles() {
-  if (!MEMORY_PATH) return '';
-  let files;
-  try { files = fs.readdirSync(MEMORY_PATH).filter(f => f.endsWith('.md')); }
-  catch { return ''; }
-  if (!files.length) return '';
-  const contents = files
-    .map(f => {
-      try { return fs.readFileSync(path.join(MEMORY_PATH, f), 'utf8').trim(); }
-      catch { return ''; }
-    })
-    .filter(Boolean);
-  if (!contents.length) return '';
-  return `=== PERSISTENT MEMORY ===\n${contents.join('\n\n---\n\n')}`;
-}
-
-// Returns a short hint listing available context file paths. Injected on every
-// resumed turn (instead of the full file contents) so Claude can self-serve with
-// the Read tool if it needs to refresh context mid-session without paying token
-// cost upfront on every message.
-function buildContextHint() {
-  const lines = [];
-  if (GLOBAL_CLAUDE_MD) lines.push(`- Operating instructions: ${GLOBAL_CLAUDE_MD}`);
-  if (PROJECT_CLAUDE_MD) lines.push(`- Vault instructions: ${PROJECT_CLAUDE_MD}`);
-  if (HOT_MD)            lines.push(`- Recent context (hot.md): ${HOT_MD}`);
-  if (config.userMdPath) lines.push(`- User profile: ${config.userMdPath}`);
-  if (MEMORY_PATH)       lines.push(`- Memory files: ${MEMORY_PATH}/ (any .md file)`);
-  if (!lines.length) return '';
-  return `CONTEXT FILES: These were loaded in full at session start. If you lose track of who you're talking to, what's currently going on, or any standing instructions — re-read the relevant file with the Read tool rather than asking the user to repeat themselves.\n${lines.join('\n')}`;
-}
-
 // Returns wiki files relevant to the message content based on config.topicMappings.
-// hot.md and the user profile are NOT listed here — they're loaded unsliced by
-// readCoreContext() on every turn.
+// Core context (hot.md, SOUL.md, USER.md, user profile) is NOT injected here —
+// ~/.claude/CLAUDE.md loads automatically every spawn and tells Claude where to
+// find everything. Claude reads on demand via the Read tool.
 function getWikiFiles(content) {
   if (!WIKI || !config.topicMappings?.length) return [];
   const q = content.toLowerCase();
@@ -410,12 +352,18 @@ const BASE_SYSTEM = [
   '',
   `Never use Obsidian wiki link syntax like [[page-name]] — the user is reading this in Discord, not Obsidian.`,
   '',
-  `CRITICAL — operating instructions: Any context files (CLAUDE.md, hot.md, user profile) loaded at session start are your standing orders, not background reading. Treat every rule in CLAUDE.md and every entry in hot.md as already-known fact — do NOT ask for context that's already there, do NOT claim ignorance about something documented there.`,
+  `CONTEXT: ~/.claude/CLAUDE.md is loaded automatically every turn — treat it as standing orders. Everything else (wiki, user profile, recent context) lives on disk and is indexed. Read it on demand with the Read tool. Never claim ignorance about something that's findable. Never ask the user to repeat context you can look up yourself.`,
   '',
   `ABSOLUTE — anti-fabrication rule: NEVER report a tool result, HTTP status code, container state, API response, log output, or file content that you did not literally receive from a tool call in THIS turn. If you lack an endpoint, token, container name, file path, or credential needed for a real check — STOP and say so plainly. It is always better to say "I don't know, checking now" than to invent a result. A fabricated result is a critical trust failure. When in doubt: read the relevant page, run the actual command, or ask. Never guess and report the guess as fact.`,
   '',
   `CROSS-TURN MEMORY: this Discord channel is wrapped around a persistent claude session (\`claude -p --resume\`). Your past tool_use/tool_result blocks from earlier turns in THIS channel ARE in your context — you can rely on them the same way you would in a Claude Code CLI session. But: across-channel state is NOT shared, and process restarts can rotate the session (you'll see a "[prior session context lost, starting fresh]" preamble if so). If a tool result is missing from your visible context and you need it, re-run the tool — don't fabricate.`,
 ].join('\n');
+
+// One-line hint appended to every turn so Claude knows memory files exist.
+// Claude reads them on demand — they are never bulk-injected.
+const MEMORY_HINT = MEMORY_PATH
+  ? `\nPersistent memory (notes about this user) is at ${MEMORY_PATH}/ — read any .md file there on demand if you need personal context.`
+  : '';
 
 // ── Discord client ────────────────────────────────────────────────────────────
 
@@ -910,26 +858,15 @@ client.on(Events.MessageCreate, async (message) => {
           attachmentNote = `\n\n[User sent ${tmpPaths.length} image(s). Use Read tool to view: ${tmpPaths.join(', ')}]`;
       }
 
-      // BASE_SYSTEM (anti-fabrication rules, tool guidance) is small and re-injected
-      // every turn via --append-system-prompt. Topic context is also small and
-      // turn-specific, so it also goes in --append-system-prompt.
-      //
-      // Context files (user profile, memory, hot.md, CLAUDE.md) are injected in
-      // full only on new sessions. On resumed sessions we inject a short hint
-      // listing the file paths instead — Claude can re-read them with the Read
-      // tool on demand if it needs a mid-session refresh, rather than paying the
-      // token cost upfront on every message.
-      const isNewSession = !sessionReg.getActive(channelId);
+      // BASE_SYSTEM + MEMORY_HINT re-injected every turn via --append-system-prompt.
+      // ~/.claude/CLAUDE.md loads automatically by the CLI and tells Claude where
+      // everything lives. Claude reads wiki, hot.md, user profile on demand.
+      // Topic context is the only thing we pre-fetch — it's message-specific and
+      // keyword-matched so we know it's relevant before Claude even starts.
       const topicFiles = getWikiFiles(content);
       const topicContext = topicFiles.length ? readWiki(...topicFiles) : '';
-      const coreContext   = isNewSession ? readCoreContext()  : '';
-      const memoryContext = isNewSession ? readMemoryFiles() : '';
-      const contextHint   = buildContextHint();
-      let appendSystem = BASE_SYSTEM;
-      if (coreContext)   appendSystem += `\n\n${coreContext}`;
-      if (memoryContext) appendSystem += `\n\n${memoryContext}`;
-      if (contextHint)   appendSystem += `\n\n${contextHint}`;
-      if (topicContext)  appendSystem += `\n\n=== TOPIC CONTEXT ===\n${topicContext}`;
+      let appendSystem = BASE_SYSTEM + MEMORY_HINT;
+      if (topicContext) appendSystem += `\n\n=== TOPIC CONTEXT ===\n${topicContext}`;
 
       const userText = `${content}${attachmentNote}`;
 
