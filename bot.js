@@ -185,6 +185,21 @@ function readMemoryFiles() {
   return `=== PERSISTENT MEMORY ===\n${contents.join('\n\n---\n\n')}`;
 }
 
+// Returns a short hint listing available context file paths. Injected on every
+// resumed turn (instead of the full file contents) so Claude can self-serve with
+// the Read tool if it needs to refresh context mid-session without paying token
+// cost upfront on every message.
+function buildContextHint() {
+  const lines = [];
+  if (GLOBAL_CLAUDE_MD) lines.push(`- Operating instructions: ${GLOBAL_CLAUDE_MD}`);
+  if (PROJECT_CLAUDE_MD) lines.push(`- Vault instructions: ${PROJECT_CLAUDE_MD}`);
+  if (HOT_MD)            lines.push(`- Recent context (hot.md): ${HOT_MD}`);
+  if (config.userMdPath) lines.push(`- User profile: ${config.userMdPath}`);
+  if (MEMORY_PATH)       lines.push(`- Memory files: ${MEMORY_PATH}/ (any .md file)`);
+  if (!lines.length) return '';
+  return `CONTEXT FILES: These were loaded in full at session start. If you lose track of who you're talking to, what's currently going on, or any standing instructions — re-read the relevant file with the Read tool rather than asking the user to repeat themselves.\n${lines.join('\n')}`;
+}
+
 // Returns wiki files relevant to the message content based on config.topicMappings.
 // hot.md and the user profile are NOT listed here — they're loaded unsliced by
 // readCoreContext() on every turn.
@@ -801,12 +816,15 @@ async function handleInboundAlert(message) {
 
       const topicFiles = getWikiFiles(alertText);
       const topicContext = topicFiles.length ? readWiki(...topicFiles) : '';
+      // Alert enrichment always gets full context since it fires in a fresh thread.
       const coreContext = readCoreContext();
       const memoryContext = readMemoryFiles();
+      const contextHint = buildContextHint();
       let appendSystem = BASE_SYSTEM;
-      if (coreContext) appendSystem += `\n\n${coreContext}`;
+      if (coreContext)   appendSystem += `\n\n${coreContext}`;
       if (memoryContext) appendSystem += `\n\n${memoryContext}`;
-      if (topicContext) appendSystem += `\n\n=== TOPIC CONTEXT ===\n${topicContext}`;
+      if (contextHint)   appendSystem += `\n\n${contextHint}`;
+      if (topicContext)  appendSystem += `\n\n=== TOPIC CONTEXT ===\n${topicContext}`;
 
       appendLog(channelId, 'user', `[INBOUND ALERT]\n${alertText}`);
 
@@ -901,14 +919,22 @@ client.on(Events.MessageCreate, async (message) => {
       // every turn via --append-system-prompt. Topic context is also small and
       // turn-specific, so it also goes in --append-system-prompt.
       //
+      // Context files (user profile, memory, hot.md, CLAUDE.md) are injected in
+      // full only on new sessions. On resumed sessions we inject a short hint
+      // listing the file paths instead — Claude can re-read them with the Read
+      // tool on demand if it needs a mid-session refresh, rather than paying the
+      // token cost upfront on every message.
+      const isNewSession = !sessionReg.getActive(channelId);
       const topicFiles = getWikiFiles(content);
       const topicContext = topicFiles.length ? readWiki(...topicFiles) : '';
-      const coreContext = readCoreContext();
-      const memoryContext = readMemoryFiles();
+      const coreContext   = isNewSession ? readCoreContext()  : '';
+      const memoryContext = isNewSession ? readMemoryFiles() : '';
+      const contextHint   = buildContextHint();
       let appendSystem = BASE_SYSTEM;
-      if (coreContext) appendSystem += `\n\n${coreContext}`;
+      if (coreContext)   appendSystem += `\n\n${coreContext}`;
       if (memoryContext) appendSystem += `\n\n${memoryContext}`;
-      if (topicContext) appendSystem += `\n\n=== TOPIC CONTEXT ===\n${topicContext}`;
+      if (contextHint)   appendSystem += `\n\n${contextHint}`;
+      if (topicContext)  appendSystem += `\n\n=== TOPIC CONTEXT ===\n${topicContext}`;
 
       const userText = `${content}${attachmentNote}`;
 
