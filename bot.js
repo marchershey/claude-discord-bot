@@ -96,7 +96,8 @@ const COMMANDS = [
   new SlashCommandBuilder()
     .setName('new').setDescription('Same as /clear — archive + start fresh next message'),
   new SlashCommandBuilder()
-    .setName('sessions').setDescription('List archived conversations for this channel'),
+    .setName('sessions').setDescription('List archived conversations for this channel, or all channels')
+    .addBooleanOption(o => o.setName('all').setDescription('Show sessions from every channel, not just this one').setRequired(false)),
   new SlashCommandBuilder()
     .setName('resume').setDescription('Re-activate an archived conversation by its number from /sessions')
     .addIntegerOption(o => o.setName('number').setDescription('Index shown by /sessions').setRequired(true).setMinValue(1)),
@@ -445,16 +446,43 @@ client.on(Events.InteractionCreate, async interaction => {
     }
 
     if (commandName === 'sessions') {
+      const showAll = interaction.options.getBoolean('all') ?? false;
+
+      if (showAll) {
+        const channels = sessionReg.listAllChannels();
+        if (!channels.length) { await interaction.editReply('No sessions anywhere yet.'); return; }
+
+        const sections = [];
+        for (const ch of channels) {
+          const header = `**<#${ch.channelId}>** (${ch.sessions.length} session${ch.sessions.length === 1 ? '' : 's'})`;
+          const lines = ch.sessions.slice(0, 5).map(s => {
+            const star = s.isActive ? '★ ' : '  ';
+            const stateLabel = s.state === 'active' ? 'active' : s.state === 'archived' ? 'archived' : 'lost';
+            const last = s.last_used ? new Date(s.last_used).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '(unknown)';
+            return `  \`${String(s.index).padStart(2)}\` ${star}[${stateLabel}] "${s.title || '(no title)'}" · ${last} · ${s.msg_count || 0} msgs`;
+          });
+          if (ch.sessions.length > 5) lines.push(`  _...and ${ch.sessions.length - 5} more_`);
+          sections.push(header + '\n' + lines.join('\n'));
+        }
+
+        const reply = '**All sessions** (newest channel first, ★ = active):\n\n' + sections.join('\n\n');
+        const chunks = reply.match(/[\s\S]{1,1900}/g) || [];
+        for (let i = 0; i < chunks.length; i++) {
+          i === 0 ? await interaction.editReply(chunks[i]) : await interaction.followUp(chunks[i]);
+        }
+        return;
+      }
+
       const list = sessionReg.listForChannel(interaction.channelId);
       if (!list.length) { await interaction.editReply('No sessions yet on this channel.'); return; }
       const lines = list.slice(0, 20).map(s => {
         const star = s.isActive ? '★ ' : '  ';
         const stateLabel = s.state === 'active' ? 'active' : s.state === 'archived' ? 'archived' : 'lost';
-        const last = s.last_used ? new Date(s.last_used).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—';
-        return `\`${String(s.index).padStart(2)}\` ${star}[${stateLabel}] "${s.title || '(no title)'}" — ${last} · ${s.msg_count || 0} msgs`;
+        const last = s.last_used ? new Date(s.last_used).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '(unknown)';
+        return `\`${String(s.index).padStart(2)}\` ${star}[${stateLabel}] "${s.title || '(no title)'}" · ${last} · ${s.msg_count || 0} msgs`;
       });
       let reply = '**Sessions on this channel** (newest first, ★ = active):\n' + lines.join('\n');
-      if (list.length > 20) reply += `\n\n_(showing 20 of ${list.length} — full list in wiki/discord-sessions.md)_`;
+      if (list.length > 20) reply += `\n\n_(showing 20 of ${list.length})_`;
       reply += '\n\nUse `/resume <number>` to re-activate one.';
       await interaction.editReply(reply);
       return;

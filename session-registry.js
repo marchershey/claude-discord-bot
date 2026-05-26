@@ -150,6 +150,24 @@ function listForChannel(channelId) {
     .map((s, i) => ({ index: i + 1, isActive: s.uuid === ch.active, ...s }));
 }
 
+// All sessions across every channel, grouped by channel ID.
+// Each entry: { channelId, active, sessions: [...] } sorted newest-first per channel.
+// Channels are sorted by their most recently used session.
+function listAllChannels() {
+  const state = load();
+  return Object.entries(state)
+    .map(([channelId, ch]) => {
+      const sessions = Object.entries(ch.sessions || {})
+        .map(([uuid, meta]) => ({ uuid, ...meta }))
+        .sort((a, b) => (b.last_used || b.created).localeCompare(a.last_used || a.created))
+        .map((s, i) => ({ index: i + 1, isActive: s.uuid === ch.active, ...s }));
+      const lastUsed = sessions[0]?.last_used || sessions[0]?.created || '';
+      return { channelId, active: ch.active, sessions, lastUsed };
+    })
+    .filter(ch => ch.sessions.length > 0)
+    .sort((a, b) => b.lastUsed.localeCompare(a.lastUsed));
+}
+
 // /resume <index>. Archives the current active first; refuses lost sessions
 // and missing jsonls. Returns the resumed UUID or null on failure.
 function resumeByIndex(channelId, index) {
@@ -283,4 +301,5 @@ module.exports = {
   deleteSession,
   deleteAllInChannel,
   purgeAll,
+  listAllChannels,
 };
