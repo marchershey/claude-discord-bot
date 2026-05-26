@@ -150,22 +150,56 @@ function listForChannel(channelId) {
     .map((s, i) => ({ index: i + 1, isActive: s.uuid === ch.active, ...s }));
 }
 
-// All sessions across every channel, grouped by channel ID.
-// Each entry: { channelId, active, sessions: [...] } sorted newest-first per channel.
-// Channels are sorted by their most recently used session.
+// All sessions across every channel with globally unique sequential indices.
+// Sessions are sorted newest-first across all channels, then grouped by channel
+// for display. Global index 1 = most recently used session anywhere.
+// Returns: { channels: [{ channelId, active, sessions }], total }
+// where each session has a unique globalIndex usable with getSessionByGlobalIndex().
 function listAllChannels() {
   const state = load();
-  return Object.entries(state)
-    .map(([channelId, ch]) => {
-      const sessions = Object.entries(ch.sessions || {})
-        .map(([uuid, meta]) => ({ uuid, ...meta }))
-        .sort((a, b) => (b.last_used || b.created).localeCompare(a.last_used || a.created))
-        .map((s, i) => ({ index: i + 1, isActive: s.uuid === ch.active, ...s }));
-      const lastUsed = sessions[0]?.last_used || sessions[0]?.created || '';
-      return { channelId, active: ch.active, sessions, lastUsed };
-    })
-    .filter(ch => ch.sessions.length > 0)
-    .sort((a, b) => b.lastUsed.localeCompare(a.lastUsed));
+
+  // Flatten all sessions with their channel ID and sort globally newest-first.
+  const allSessions = [];
+  for (const [channelId, ch] of Object.entries(state)) {
+    for (const [uuid, meta] of Object.entries(ch.sessions || {})) {
+      allSessions.push({ channelId, uuid, active: ch.active, ...meta });
+    }
+  }
+  allSessions.sort((a, b) => (b.last_used || b.created || '').localeCompare(a.last_used || a.created || ''));
+
+  // Assign global indices.
+  allSessions.forEach((s, i) => { s.globalIndex = i + 1; });
+
+  // Re-group by channel, preserving global index. Channels sorted by their
+  // most recently used session (i.e. lowest globalIndex in the channel).
+  const byChannel = {};
+  for (const s of allSessions) {
+    if (!byChannel[s.channelId]) {
+      byChannel[s.channelId] = { channelId: s.channelId, active: s.active, sessions: [] };
+    }
+    byChannel[s.channelId].sessions.push({ ...s, isActive: s.uuid === s.active });
+  }
+
+  const channels = Object.values(byChannel)
+    .sort((a, b) => a.sessions[0].globalIndex - b.sessions[0].globalIndex);
+
+  return { channels, total: allSessions.length };
+}
+
+// Look up a session by its global index (from listAllChannels).
+// Returns { channelId, uuid } or null if not found.
+function getSessionByGlobalIndex(n) {
+  const state = load();
+  const allSessions = [];
+  for (const [channelId, ch] of Object.entries(state)) {
+    for (const [uuid, meta] of Object.entries(ch.sessions || {})) {
+      allSessions.push({ channelId, uuid, ...meta });
+    }
+  }
+  allSessions.sort((a, b) => (b.last_used || b.created || '').localeCompare(a.last_used || a.created || ''));
+  const session = allSessions[n - 1];
+  if (!session) return null;
+  return { channelId: session.channelId, uuid: session.uuid };
 }
 
 // /resume <index>. Archives the current active first; refuses lost sessions
@@ -302,4 +336,5 @@ module.exports = {
   deleteAllInChannel,
   purgeAll,
   listAllChannels,
+  getSessionByGlobalIndex,
 };

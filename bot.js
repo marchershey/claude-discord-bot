@@ -449,7 +449,7 @@ client.on(Events.InteractionCreate, async interaction => {
       const showAll = interaction.options.getBoolean('all') ?? false;
 
       if (showAll) {
-        const channels = sessionReg.listAllChannels();
+        const { channels, total } = sessionReg.listAllChannels();
         if (!channels.length) { await interaction.editReply('No sessions anywhere yet.'); return; }
 
         const sections = [];
@@ -459,13 +459,13 @@ client.on(Events.InteractionCreate, async interaction => {
             const star = s.isActive ? '★ ' : '  ';
             const stateLabel = s.state === 'active' ? 'active' : s.state === 'archived' ? 'archived' : 'lost';
             const last = s.last_used ? new Date(s.last_used).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '(unknown)';
-            return `  \`${String(s.index).padStart(2)}\` ${star}[${stateLabel}] "${s.title || '(no title)'}" · ${last} · ${s.msg_count || 0} msgs`;
+            return `  \`${String(s.globalIndex).padStart(2)}\` ${star}[${stateLabel}] "${s.title || '(no title)'}" · ${last} · ${s.msg_count || 0} msgs`;
           });
-          if (ch.sessions.length > 5) lines.push(`  _...and ${ch.sessions.length - 5} more_`);
+          if (ch.sessions.length > 5) lines.push(`  _...and ${ch.sessions.length - 5} more (use \`/sessions\` in that channel to see all)_`);
           sections.push(header + '\n' + lines.join('\n'));
         }
 
-        const reply = '**All sessions** (newest channel first, ★ = active):\n\n' + sections.join('\n\n');
+        const reply = `**All sessions** (${total} total, numbered globally, ★ = active):\n\nUse \`/delete <number>\` to remove any session from here.\n\n` + sections.join('\n\n');
         const chunks = reply.match(/[\s\S]{1,1900}/g) || [];
         for (let i = 0; i < chunks.length; i++) {
           i === 0 ? await interaction.editReply(chunks[i]) : await interaction.followUp(chunks[i]);
@@ -512,21 +512,21 @@ client.on(Events.InteractionCreate, async interaction => {
 
       const n = parseInt(target, 10);
       if (isNaN(n) || n < 1) {
-        await interaction.editReply('Invalid target. Use a session number from `/sessions`, or `all` to delete everything in this channel.');
+        await interaction.editReply('Invalid target. Use a session number from `/sessions all:True`, or `all` to delete everything in this channel.');
         return;
       }
 
-      const list = sessionReg.listForChannel(interaction.channelId);
-      const target_session = list.find(s => s.index === n);
-      if (!target_session) {
-        await interaction.editReply(`No session #${n} found. Run \`/sessions\` to see what's available.`);
+      // Look up by global index — works from any channel.
+      const found = sessionReg.getSessionByGlobalIndex(n);
+      if (!found) {
+        await interaction.editReply(`No session #${n} found. Run \`/sessions all:True\` to see all sessions with their numbers.`);
         return;
       }
 
-      const deleted = sessionReg.deleteSession(interaction.channelId, target_session.uuid);
+      const deleted = sessionReg.deleteSession(found.channelId, found.uuid);
       if (deleted) {
-        const title = target_session.title || '(no title)';
-        await interaction.editReply(`🗑️ Deleted session #${n}: "${title}"`);
+        const channelMention = found.channelId === interaction.channelId ? 'this channel' : `<#${found.channelId}>`;
+        await interaction.editReply(`🗑️ Deleted session #${n} (from ${channelMention}).`);
       } else {
         await interaction.editReply(`Could not delete session #${n}. It may have already been removed.`);
       }
