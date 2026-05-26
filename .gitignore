@@ -1,0 +1,20 @@
+node_modules/
+.claude/
+
+# Personal config — contains your paths, wiki location, service IPs, etc.
+config.js
+
+# PM2 config contains the real Discord token — never commit it
+ecosystem.config.js
+
+# Runtime state
+chat-log.jsonl
+sessions.json
+sessions-view.md
+reminders.json
+
+# Private design notes
+DESIGN_NOTES.md
+
+# Environment
+.env
