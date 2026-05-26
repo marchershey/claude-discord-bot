@@ -814,17 +814,12 @@ async function handleInboundAlert(message) {
         alertText,
       ].join('\n');
 
+      // Alert enrichment is a focused task — it only needs tool rules and relevant
+      // service docs. User profile, memory, hot.md, and CLAUDE.md are all noise here.
       const topicFiles = getWikiFiles(alertText);
       const topicContext = topicFiles.length ? readWiki(...topicFiles) : '';
-      // Alert enrichment always gets full context since it fires in a fresh thread.
-      const coreContext = readCoreContext();
-      const memoryContext = readMemoryFiles();
-      const contextHint = buildContextHint();
       let appendSystem = BASE_SYSTEM;
-      if (coreContext)   appendSystem += `\n\n${coreContext}`;
-      if (memoryContext) appendSystem += `\n\n${memoryContext}`;
-      if (contextHint)   appendSystem += `\n\n${contextHint}`;
-      if (topicContext)  appendSystem += `\n\n=== TOPIC CONTEXT ===\n${topicContext}`;
+      if (topicContext) appendSystem += `\n\n=== TOPIC CONTEXT ===\n${topicContext}`;
 
       appendLog(channelId, 'user', `[INBOUND ALERT]\n${alertText}`);
 
