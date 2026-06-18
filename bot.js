@@ -18,6 +18,7 @@ const MEMORY_PATH       = config.memoryPath || null;
 const CLAUDE            = config.claudePath || 'claude';
 const DISCORD_TOKEN     = process.env.DISCORD_TOKEN;
 const REMINDERS_FILE    = path.join(__dirname, 'reminders.json');
+const MODEL_STATE_FILE  = path.join(__dirname, 'model-state.json');
 
 // Proactive alert enrichment. A monitoring bot (e.g. n8n) posts alerts to a
 // designated channel using the SAME bot token, so alert messages show
@@ -47,6 +48,25 @@ function logError(label, err) {
 
 process.on('uncaughtException', err => fatal('uncaughtException', err));
 process.on('unhandledRejection', (reason) => fatal('unhandledRejection', reason));
+
+// ── Model state ───────────────────────────────────────────────────────────────
+
+// Persists across pm2 restarts. null = let claude CLI pick its default.
+let currentModel = null;
+
+function loadModel() {
+  try {
+    const data = JSON.parse(fs.readFileSync(MODEL_STATE_FILE, 'utf8'));
+    currentModel = data.model || null;
+    if (currentModel) console.log(`Model preference: ${currentModel}`);
+  } catch { /* file doesn't exist yet */ }
+}
+
+function saveModel(model) {
+  currentModel = model;
+  try { fs.writeFileSync(MODEL_STATE_FILE, JSON.stringify({ model }, null, 2)); }
+  catch (e) { logError('saveModel', e); }
+}
 
 // ── Reminder persistence ───────────────────────────────────────────────────────
 
@@ -126,6 +146,16 @@ const COMMANDS = [
         { name: 'down', value: 'down' },
         { name: 'resolved', value: 'resolved' },
         { name: 'action', value: 'action' },
+      )),
+  new SlashCommandBuilder()
+    .setName('model').setDescription('Show or change the AI model')
+    .addStringOption(o => o.setName('model').setDescription('Model to switch to (omit to show current)')
+      .setRequired(false)
+      .addChoices(
+        { name: 'opus — most capable', value: 'opus' },
+        { name: 'sonnet — balanced (default)', value: 'sonnet' },
+        { name: 'haiku — fastest', value: 'haiku' },
+        { name: 'reset to default', value: 'reset' },
       )),
 ].map(c => c.toJSON());
 
@@ -220,6 +250,7 @@ function runClaude({
   channelId = null,
   appendSystem = '',
   tools = 'Read,Write,Edit,Bash,WebSearch,WebFetch',
+  model = null,
   oneShot = false,
   onChunk,
   _retry = false,
@@ -246,6 +277,7 @@ function runClaude({
     }
 
     if (appendSystem) args.push('--append-system-prompt', appendSystem);
+    if (model) args.push('--model', model);
     args.push('--tools', tools);
     args.push('--output-format', 'stream-json');
     args.push('--verbose'); // stream-json requires --verbose with --print
@@ -302,7 +334,7 @@ function runClaude({
           try {
             const result = await runClaude({
               userText: `[prior session context lost, starting fresh]\n\n${userText}`,
-              channelId, appendSystem, tools, oneShot, onChunk,
+              channelId, appendSystem, tools, model, oneShot, onChunk,
               _retry: true,
             });
             return resolve(result);
@@ -389,6 +421,7 @@ client.once(Events.ClientReady, async c => {
     logError('slash command registration', err);
   }
   loadReminders();
+  loadModel();
   // Session registry loads lazily on first read — nothing to do at boot.
 });
 
@@ -411,6 +444,7 @@ client.on(Events.InteractionCreate, async interaction => {
         WIKI ? '`/wiki <page>` — read a wiki page (e.g. `/wiki homelab/proxmox`)' : null,
         '`/remind <time> <message>` — set a reminder (e.g. `/remind 2h check the build`)',
         '`/reminders` — list active reminders',
+        '`/model` — show or change the AI model (opus / sonnet / haiku)',
         ALERT_CHANNEL_ID ? '`/simulate-alert [service] [kind]` — post a fake alert to test enrichment' : null,
         '`/help` — this list',
         '',
@@ -586,6 +620,23 @@ client.on(Events.InteractionCreate, async interaction => {
       if (!list.length) { await interaction.editReply('No active reminders.'); return; }
       const lines = list.map(r => `• "${r.text}" — in ${msToHuman(r.fireAt - Date.now())}`);
       await interaction.editReply('**Active reminders:**\n' + lines.join('\n'));
+      return;
+    }
+
+    if (commandName === 'model') {
+      const choice = interaction.options.getString('model');
+      if (!choice) {
+        const display = currentModel ? `**${currentModel}**` : '**default** (sonnet)';
+        await interaction.editReply(`Current model: ${display}\nUse \`/model model:<choice>\` to switch. Applies to the next message — no need to \`/clear\`.`);
+        return;
+      }
+      if (choice === 'reset') {
+        saveModel(null);
+        await interaction.editReply('✅ Model reset to **default** (sonnet). Takes effect on next message.');
+      } else {
+        saveModel(choice);
+        await interaction.editReply(`✅ Switched to **${choice}**. Takes effect on next message — session continues, no need to \`/clear\`.`);
+      }
       return;
     }
 
@@ -779,6 +830,7 @@ async function handleInboundAlert(message) {
         userText: fullPrompt,
         channelId,
         appendSystem,
+        model: currentModel,
         onChunk: async (acc) => {
           const now = Date.now();
           if (now - lastSendTime >= 2000) {
@@ -884,6 +936,7 @@ client.on(Events.MessageCreate, async (message) => {
         userText,
         channelId,
         appendSystem,
+        model: currentModel,
         onChunk: async (acc) => {
           const now = Date.now();
           if (now - lastSendTime >= 2000) {

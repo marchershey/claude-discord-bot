@@ -12,6 +12,7 @@ chat-log.jsonl
 sessions.json
 sessions-view.md
 reminders.json
+model-state.json
 
 # Private design notes
 DESIGN_NOTES.md
