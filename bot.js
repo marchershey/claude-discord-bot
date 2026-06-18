@@ -125,6 +125,9 @@ const COMMANDS = [
     .setName('wiki').setDescription('Read a wiki page')
     .addStringOption(o => o.setName('page').setDescription('Page path, e.g. homelab/proxmox').setRequired(true)),
   new SlashCommandBuilder()
+    .setName('wiki-search').setDescription('Search the wiki by topic (synonym-aware) and get an answer')
+    .addStringOption(o => o.setName('query').setDescription('What to look up, e.g. "how is ad blocking set up"').setRequired(true)),
+  new SlashCommandBuilder()
     .setName('remind').setDescription('Set a reminder')
     .addStringOption(o => o.setName('time').setDescription('e.g. 2h, 30m, 1h30m').setRequired(true))
     .addStringOption(o => o.setName('message').setDescription('What to remind you about').setRequired(true)),
@@ -152,6 +155,7 @@ const COMMANDS = [
     .addStringOption(o => o.setName('model').setDescription('Model to switch to (omit to show current)')
       .setRequired(false)
       .addChoices(
+        { name: 'fable — newest', value: 'claude-fable-5' },
         { name: 'opus — most capable', value: 'opus' },
         { name: 'sonnet — balanced (default)', value: 'sonnet' },
         { name: 'haiku — fastest', value: 'haiku' },
@@ -442,9 +446,10 @@ client.on(Events.InteractionCreate, async interaction => {
         '`/resume <number>` — re-activate an archived conversation (from `/sessions`)',
         '`/status` — live status check of configured services',
         WIKI ? '`/wiki <page>` — read a wiki page (e.g. `/wiki homelab/proxmox`)' : null,
+        WIKI ? '`/wiki-search <query>` — search the wiki by topic, synonym-aware (e.g. `/wiki-search how is ad blocking set up`)' : null,
         '`/remind <time> <message>` — set a reminder (e.g. `/remind 2h check the build`)',
         '`/reminders` — list active reminders',
-        '`/model` — show or change the AI model (opus / sonnet / haiku)',
+        '`/model` — show or change the AI model (fable / opus / sonnet / haiku)',
         ALERT_CHANNEL_ID ? '`/simulate-alert [service] [kind]` — post a fake alert to test enrichment' : null,
         '`/help` — this list',
         '',
@@ -589,6 +594,18 @@ client.on(Events.InteractionCreate, async interaction => {
       } catch {
         await interaction.editReply(`Page not found: \`${page}\``);
       }
+      return;
+    }
+
+    if (commandName === 'wiki-search') {
+      if (!WIKI) {
+        await interaction.editReply('Wiki not configured. Set `wikiPath` in `config.js`.');
+        return;
+      }
+      const query = interaction.options.getString('query');
+      const userText = `Search the user's wiki to answer this question. Follow the wiki navigation rules in CLAUDE.md: check hot.md first, then grep with synonym expansion (\`rg -i\` with OR'd synonyms; frontmatter \`aliases:\` are deliberate search terms), open the most relevant pages, and answer concisely. Cite the source page path(s) you used. If nothing matches, say so plainly. Question: ${query}`;
+      const response = await runClaude({ userText, appendSystem: BASE_SYSTEM, tools: 'Read,Bash,Grep,Glob', oneShot: true });
+      await sendChunks(interaction, response.display || 'No results found.', { isInteraction: true });
       return;
     }
 
@@ -920,7 +937,24 @@ client.on(Events.MessageCreate, async (message) => {
       let appendSystem = BASE_SYSTEM + MEMORY_HINT;
       if (topicContext) appendSystem += `\n\n=== TOPIC CONTEXT ===\n${topicContext}`;
 
-      const userText = `${content}${attachmentNote}`;
+      // If this is a reply, pull in the message it replies to. Out-of-band updates
+      // posted via the shared bot token (e.g. build/status DMs from another process)
+      // never enter this channel's `claude --resume` session, so a bare reply would
+      // otherwise resume with no idea what it's answering. Injecting the replied-to
+      // text fixes that AND disambiguates which message the user is responding to.
+      let replyContext = '';
+      if (message.reference?.messageId) {
+        try {
+          const ref = await message.channel.messages.fetch(message.reference.messageId);
+          const refText = (ref?.content || '').trim();
+          if (refText) {
+            const who = ref.author?.id === client.user?.id ? 'an earlier message you posted' : 'an earlier message';
+            replyContext = `\n\n[the user sent the message above as a reply to ${who} — it may be an out-of-band status update not in your session memory, so treat his message as a response to this:\n«${refText.slice(0, 1500)}»]`;
+          }
+        } catch {}
+      }
+
+      const userText = `${content}${replyContext}${attachmentNote}`;
 
       // Audit log: write the user side BEFORE spawning so a crashed claude run
       // still leaves the user msg in chat-log.jsonl (sessionId fills in post-run).
