@@ -16,6 +16,9 @@ const WIKI              = config.wikiPath || null;
 const VAULT             = config.vaultPath || null;
 const MEMORY_PATH       = config.memoryPath || null;
 const CLAUDE            = config.claudePath || 'claude';
+// Name the bot uses when referring to its operator in prompts. Falls back to a
+// neutral term so a cloned bot stays generic until the user sets config.userName.
+const USER_NAME         = config.userName || 'the user';
 const DISCORD_TOKEN     = process.env.DISCORD_TOKEN;
 const REMINDERS_FILE    = path.join(__dirname, 'reminders.json');
 const MODEL_STATE_FILE  = path.join(__dirname, 'model-state.json');
@@ -608,7 +611,7 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
       const query = interaction.options.getString('query');
-      const userText = `Search the user's wiki to answer this question. Follow the wiki navigation rules in CLAUDE.md: check hot.md first, then grep with synonym expansion (\`rg -i\` with OR'd synonyms; frontmatter \`aliases:\` are deliberate search terms), open the most relevant pages, and answer concisely. Cite the source page path(s) you used. If nothing matches, say so plainly. Question: ${query}`;
+      const userText = `Search ${USER_NAME}'s wiki to answer this question. Follow the wiki navigation rules in CLAUDE.md: check hot.md first, then grep with synonym expansion (\`rg -i\` with OR'd synonyms; frontmatter \`aliases:\` are deliberate search terms), open the most relevant pages, and answer concisely. Cite the source page path(s) you used. If nothing matches, say so plainly. Question: ${query}`;
       const response = await runClaude({ userText, appendSystem: BASE_SYSTEM, tools: 'Read,Bash,Grep,Glob', oneShot: true });
       await sendChunks(interaction, response.display || 'No results found.', { isInteraction: true });
       return;
@@ -954,7 +957,7 @@ client.on(Events.MessageCreate, async (message) => {
           const refText = (ref?.content || '').trim();
           if (refText) {
             const who = ref.author?.id === client.user?.id ? 'an earlier message you posted' : 'an earlier message';
-            replyContext = `\n\n[the user sent the message above as a reply to ${who} — it may be an out-of-band status update not in your session memory, so treat his message as a response to this:\n«${refText.slice(0, 1500)}»]`;
+            replyContext = `\n\n[${USER_NAME} sent the message above as a reply to ${who} — it may be an out-of-band status update not in your session memory, so treat their message as a response to this:\n«${refText.slice(0, 1500)}»]`;
           }
         } catch {}
       }
