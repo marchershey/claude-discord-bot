@@ -21,9 +21,10 @@ const WIKI_PAGE = path.join(__dirname, 'sessions-view.md');
 
 // Claude CLI persists session JSONLs in a cwd-encoded subdirectory under
 // ~/.claude/projects/. The encoding replaces every '/' with '-' in the cwd.
-// We derive this from config.wikiPath so it stays in sync with the bot's
-// actual working directory.
-const _cwd = config.wikiPath || process.cwd();
+// Must match the cwd the bot actually spawns claude from (config.launchCwd)
+// so the registry finds the JSONLs claude writes. Falls back to wikiPath
+// for older configs without launchCwd.
+const _cwd = config.launchCwd || config.wikiPath || process.cwd();
 const CLAUDE_PROJECT_DIR = path.join(os.homedir(), '.claude', 'projects', _cwd.replace(/\//g, '-'));
 
 function load() {

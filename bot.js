@@ -287,7 +287,12 @@ function runClaude({
     args.push('--verbose'); // stream-json requires --verbose with --print
     args.push('--dangerously-skip-permissions');
 
-    const cwd = WIKI || process.cwd();
+    // Launch from config.launchCwd — the same dir the user runs `claude` from —
+    // so the bot shares that project: same auto-loaded memory + CLAUDE.md/@imports,
+    // and its sessions land in the user's `claude` resume list. Falls back to
+    // wikiPath, then the bot's own cwd. Wiki file access is unaffected (it uses
+    // the absolute config.wikiPath).
+    const cwd = config.launchCwd || WIKI || process.cwd();
     const proc = spawn(CLAUDE, args, { cwd });
 
     let lineBuffer = '';

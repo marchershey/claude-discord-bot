@@ -28,6 +28,14 @@ module.exports = {
   // If you use Claude Code, check: ~/.claude/projects/<encoded-homedir>/memory/
   memoryPath: null,  // e.g. '/home/you/.claude/projects/-home-you/memory'
 
+  // Directory the bot launches `claude` from (the spawned process's cwd).
+  // Set this to the SAME directory you run the interactive `claude` CLI from.
+  // Claude keys its auto-loaded memory, CLAUDE.md, and session/resume list by
+  // this cwd — so matching it means the bot shares your brain and its sessions
+  // appear in your `claude` resume list. Kept separate from wikiPath so wiki
+  // file access is unchanged. Falls back to wikiPath, then the bot's own dir.
+  launchCwd: null,  // e.g. '/home/you'
+
   // ── Identity ───────────────────────────────────────────────────────────────
 
   // Your name — used in Claude's system prompt so it addresses you naturally.
