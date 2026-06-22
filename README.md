@@ -97,6 +97,7 @@ module.exports = {
   wikiPath: null,
   vaultPath: null,
   userMdPath: null,
+  launchCwd: null,   // dir to launch Claude from — see "Sharing Your Claude Code Context"
   userName: null,
   alertChannelId: null,
   statusServices: [],
@@ -224,6 +225,21 @@ The bot never deletes conversation history by default. `/clear` just archives it
 ---
 
 ## Optional Features
+
+### Sharing Your Claude Code Context (`launchCwd`)
+
+The Claude Code CLI loads its context — your global `~/.claude/CLAUDE.md`, your project memory, and the list of resumable sessions — based on **the directory it's launched from**. Two `claude` processes started from the *same* directory share that context and session list; started from different directories, they don't.
+
+By default this bot launches Claude from `wikiPath` (or its own folder if no wiki is set). If you **also use the Claude Code CLI yourself** and want the bot to share the *same* setup — the same memory and `CLAUDE.md`, with the bot's conversations even showing up in your own `claude` resume list — set `launchCwd` to the directory you normally run `claude` from.
+
+```js
+// Example: if you always start `claude` from your home directory
+launchCwd: '/home/you',
+```
+
+That one line is what makes the bot and your personal CLI behave like one assistant instead of two disconnected ones.
+
+Leave it `null` if you don't use the interactive CLI, or don't care about sharing context — the bot falls back to `wikiPath`, then its own directory. Note: `launchCwd` only sets the working directory Claude is spawned in; it does **not** change where your notes live (that's still `wikiPath`).
 
 ### Wiki / Notes Integration
 
