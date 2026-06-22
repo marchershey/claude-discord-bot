@@ -855,7 +855,10 @@ async function handleInboundAlert(message) {
         userText: fullPrompt,
         channelId,
         appendSystem,
-        model: currentModel,
+        // Alert enrichment is mechanical diagnosis — run it on the cheapest model
+        // regardless of the chat default. (Longer term: move alerts off Claude
+        // entirely — see wiki/plans/alerts-off-claude.)
+        model: 'haiku',
         onChunk: async (acc) => {
           const now = Date.now();
           if (now - lastSendTime >= 2000) {
