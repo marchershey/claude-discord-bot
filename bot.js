@@ -164,6 +164,16 @@ const COMMANDS = [
         { name: 'haiku — fastest', value: 'haiku' },
         { name: 'reset to default', value: 'reset' },
       )),
+  new SlashCommandBuilder()
+    .setName('end').setDescription('Finalize this conversation as a session (wiki file, hot.md, changelog, commit), then archive'),
+  new SlashCommandBuilder()
+    .setName('service').setDescription('Start, stop, or restart a homelab service by name')
+    .addSubcommand(sc => sc.setName('restart').setDescription('Restart a service (Docker container, systemd unit, Proxmox VM, or PM2 process)')
+      .addStringOption(o => o.setName('name').setDescription('Service name or alias, e.g. Seerr, Plex, Pi-hole').setRequired(true)))
+    .addSubcommand(sc => sc.setName('stop').setDescription('Stop a service (Docker container, systemd unit, Proxmox VM, or PM2 process)')
+      .addStringOption(o => o.setName('name').setDescription('Service name or alias, e.g. Seerr, Plex, Pi-hole').setRequired(true)))
+    .addSubcommand(sc => sc.setName('start').setDescription('Start a service (Docker container, systemd unit, Proxmox VM, or PM2 process)')
+      .addStringOption(o => o.setName('name').setDescription('Service name or alias, e.g. Seerr, Plex, Pi-hole').setRequired(true))),
 ].map(c => c.toJSON());
 
 // ── Wiki helpers ──────────────────────────────────────────────────────────────
@@ -409,6 +419,18 @@ const MEMORY_HINT = MEMORY_PATH
   ? `\nPersistent memory index: ${MEMORY_PATH}/MEMORY.md — read it for a summary of what's remembered, then read individual files on demand.`
   : '';
 
+// System prompt for /end. Deliberately NOT BASE_SYSTEM: that bans [[wikilink]]
+// syntax (right for chat, wrong here — the session file, hot.md, sessions-index,
+// and changelog all REQUIRE wikilinks). CLAUDE.md auto-loads, so this only adds
+// the finalization framing + a live status line so Marc sees progress in Discord.
+const END_SYSTEM = [
+  `You are finalizing a Discord-channel conversation as a session. Invoke the session-end skill and follow its workflow exactly: summarize the work done in THIS channel's conversation, write the wiki/sessions file, register it in sessions-index, update hot.md, append the changelog, and do the conditional commit + push.`,
+  '',
+  `When writing wiki files, use normal Obsidian [[wikilink]] syntax — the wiki requires it. ONLY your final summary message back to Discord should be brief and free of [[ ]] syntax.`,
+  '',
+  `Before each tool call, write one short status line (e.g. "📝 Writing session file…", "🔄 Updating hot.md…", "💾 Committing…") so progress is visible live in Discord. Keep it one line.`,
+].join('\n');
+
 // ── Discord client ────────────────────────────────────────────────────────────
 
 const client = new Client({
@@ -453,11 +475,13 @@ client.on(Events.InteractionCreate, async interaction => {
         '`/sessions` — list this channel\'s archived conversations',
         '`/resume <number>` — re-activate an archived conversation (from `/sessions`)',
         '`/status` — live status check of configured services',
+        '`/service restart|stop|start <name>` — control a homelab service by name (e.g. `/service restart Seerr`)',
         WIKI ? '`/wiki <page>` — read a wiki page (e.g. `/wiki homelab/proxmox`)' : null,
         WIKI ? '`/wiki-search <query>` — search the wiki by topic, synonym-aware (e.g. `/wiki-search how is ad blocking set up`)' : null,
         '`/remind <time> <message>` — set a reminder (e.g. `/remind 2h check the build`)',
         '`/reminders` — list active reminders',
         '`/model` — show or change the AI model (fable / opus / sonnet / haiku)',
+        '`/end` — finalize this conversation as a session (wiki session file, hot.md, changelog, commit/push) then archive it',
         ALERT_CHANNEL_ID ? '`/simulate-alert [service] [kind]` — post a fake alert to test enrichment' : null,
         '`/help` — this list',
         '',
@@ -590,6 +614,19 @@ client.on(Events.InteractionCreate, async interaction => {
       return;
     }
 
+    if (commandName === 'service') {
+      if (!WIKI) {
+        await interaction.editReply('Wiki not configured (service registry lives at wiki/homelab/service-registry.md). Set `wikiPath` in `config.js`.');
+        return;
+      }
+      const sub = interaction.options.getSubcommand(); // restart | stop | start
+      const name = interaction.options.getString('name');
+      const userText = `Use the service-control skill to ${sub} the "${name}" service. Resolve it in the service registry (wiki/homelab/service-registry.md) by Service name or Alias — never guess a container/unit name. Run the real command over SSH (or locally for a pm2 target), then verify the resulting state with a real status check and report back plainly: service name, action taken, the exact command you ran, and the verified result. If the registry lists a Caution note for this service, state it before or alongside the result. If "${name}" isn't in the registry, say so plainly and don't guess — offer to add a row instead.`;
+      const response = await runClaude({ userText, appendSystem: BASE_SYSTEM, tools: 'Bash,Read,Grep', oneShot: true });
+      await sendChunks(interaction, response.display || `Failed to ${sub} ${name}.`, { isInteraction: true });
+      return;
+    }
+
     if (commandName === 'wiki') {
       if (!WIKI) {
         await interaction.editReply('Wiki not configured. Set `wikiPath` in `config.js`.');
@@ -614,6 +651,36 @@ client.on(Events.InteractionCreate, async interaction => {
       const userText = `Search ${USER_NAME}'s wiki to answer this question. Follow the wiki navigation rules in CLAUDE.md: check hot.md first, then grep with synonym expansion (\`rg -i\` with OR'd synonyms; frontmatter \`aliases:\` are deliberate search terms), open the most relevant pages, and answer concisely. Cite the source page path(s) you used. If nothing matches, say so plainly. Question: ${query}`;
       const response = await runClaude({ userText, appendSystem: BASE_SYSTEM, tools: 'Read,Bash,Grep,Glob', oneShot: true });
       await sendChunks(interaction, response.display || 'No results found.', { isInteraction: true });
+      return;
+    }
+
+    if (commandName === 'end') {
+      // Finalize THIS channel's conversation via the session-end skill. Runs on the
+      // channel's LIVE session (not oneShot) so the model has the conversation in
+      // context to summarize. `/end` resolves the skill straight from stdin in print
+      // mode (verified); the skill's tools (Read/Write/Edit/Bash) are in the default set.
+      let lastEdit = 0;
+      const response = await runClaude({
+        userText: '/end',
+        channelId: interaction.channelId,
+        appendSystem: END_SYSTEM,
+        model: currentModel,
+        // Stream progress: session-end is slow (multi-file writes + commit/push) and a
+        // bare deferReply shows nothing until it's done. Throttled tail view.
+        onChunk: async (acc) => {
+          const now = Date.now();
+          if (now - lastEdit < 2500) return;
+          lastEdit = now;
+          try { await interaction.editReply(acc.slice(-1900) || '⏳ Finalizing…'); } catch {}
+        },
+      });
+      await sendChunks(interaction, response.display || '✓ Session finalized.', { isInteraction: true });
+      // Mirror the CLI /end as a clean unit boundary: archive the just-finalized
+      // session so the next message starts fresh and a future /end won't re-summarize
+      // this same (possibly multi-day) conversation. archiveActive targets the active
+      // session, which runClaude just recorded the turn on.
+      const archived = sessionReg.archiveActive(interaction.channelId);
+      if (archived) await interaction.followUp(`📁 Archived this conversation (\`${archived.slice(0, 8)}…\`). Next message starts fresh; \`/resume <N>\` to come back.`);
       return;
     }
 
